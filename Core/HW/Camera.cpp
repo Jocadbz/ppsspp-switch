@@ -19,6 +19,7 @@
 #include "Camera.h"
 #include "Core/Config.h"
 
+#ifdef USE_FFMPEG
 void convert_frame(int inw, int inh, unsigned char *inData, AVPixelFormat inFormat,
 					int outw, int outh, unsigned char **outData, int *outLen) {
 
@@ -56,6 +57,7 @@ void convert_frame(int inw, int inh, unsigned char *inData, AVPixelFormat inForm
 		*outData, *outLen, outw, outh, 3, rgbData, params);
 	free(rgbData);
 }
+#endif
 
 void __cameraDummyImage(int width, int height, unsigned char** outData, int* outLen) {
 	unsigned char* rgbData = (unsigned char*)malloc(3 * width * height);

@@ -23,10 +23,12 @@
 #include "ext/jpge/jpgd.h"
 #include "ext/jpge/jpge.h"
 
+#ifdef USE_FFMPEG
 extern "C" {
 #include "libswscale/swscale.h"
 #include "libavutil/imgutils.h"
 }
+#endif
 
 void __cameraDummyImage(int width, int height, unsigned char** outData, int* outLen);
 

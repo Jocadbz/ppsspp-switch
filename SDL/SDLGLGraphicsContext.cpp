@@ -81,7 +81,10 @@ static bool EGL_OpenInit() {
 }
 
 static int8_t EGL_Open(SDL_Window *window) {
-#if defined(USING_FBDEV)
+#if defined(HAVE_LIBNX)
+	g_Display = (EGLNativeDisplayType)EGL_DEFAULT_DISPLAY;
+	g_Window = (EGLNativeWindowType)nullptr;
+#elif defined(USING_FBDEV)
 	g_Display = (EGLNativeDisplayType)nullptr;
 	g_Window = (EGLNativeWindowType)nullptr;
 #elif defined(__APPLE__)
@@ -290,7 +293,7 @@ void EGL_Close() {
 		g_eglDisplay = EGL_NO_DISPLAY;
 	}
 	if (g_Display != nullptr) {
-#if !defined(USING_FBDEV)
+#if !defined(USING_FBDEV) && !defined(HAVE_LIBNX)
 		if (g_XDisplayOpen)
 			XCloseDisplay((Display *)g_Display);
 #endif

@@ -1217,8 +1217,10 @@ u32 _AtracDecodeData(int atracID, u8 *outbuf, u32 outbufPtr, u32 *SamplesNum, u3
 
 				AtracDecodeResult res = ATDECODE_FEEDME;
 				while (atrac->FillPacket(-skipSamples)) {
+#ifdef USE_FFMPEG
 					uint32_t packetAddr = atrac->CurBufferAddress(-skipSamples);
 					int packetSize = atrac->packet_->size;
+#endif // USE_FFMPEG
 					res = atrac->DecodePacket();
 					if (res == ATDECODE_FAILED) {
 						*SamplesNum = 0;

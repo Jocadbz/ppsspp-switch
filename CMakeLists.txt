@@ -405,6 +405,10 @@ macro(setup_target_project TargetName ProjectDir)
 	endforeach()
 endmacro()
 
+if(USE_LIBNX)
+	add_library(OSDependent INTERFACE IMPORTED GLOBAL)
+endif()
+
 add_subdirectory(ext)
 
 if(WIN32)
@@ -991,6 +995,9 @@ else()
 		ext/libzip/zip_utf-8.c
 		ext/libzip/zip_err_str.c
 	)
+	set_property(TARGET libzip PROPERTY C_STANDARD 11)
+	set_property(TARGET libzip PROPERTY C_STANDARD_REQUIRED ON)
+	set_property(TARGET libzip PROPERTY C_EXTENSIONS ON)
 	if(WIN32)
 		target_sources(libzip PRIVATE
 			ext/libzip/zip_source_file_win32.c

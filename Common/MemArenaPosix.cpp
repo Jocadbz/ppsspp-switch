@@ -44,9 +44,14 @@ static const std::string tmpfs_ram_temp_file = "/dev/shm/gc_mem.tmp";
 
 #ifdef HAVE_LIBNX
 #include <malloc.h> // memalign
+static constexpr size_t SWITCH_MEMORY_SIZE = 0x10000000;
+static constexpr size_t SWITCH_PAGE_SIZE = 0x1000;
 static uintptr_t memoryBase = 0;
 static uintptr_t memoryCodeBase = 0;
 static uintptr_t memorySrcBase = 0;
+static VirtmemReservation *memoryReservation = nullptr;
+static VirtmemReservation *memoryCodeReservation = nullptr;
+static bool memoryCodeMapped = false;
 #endif
 
 // do not make this "static"
@@ -119,33 +124,51 @@ void MemArena::ReleaseSpace() {
 #ifndef HAVE_LIBNX
 	close(fd);
 #else
-	if(R_FAILED(svcUnmapProcessCodeMemory(envGetOwnProcessHandle(), (u64)memoryCodeBase, (u64)memorySrcBase, 0x10000000)))
-        printf("Failed to release view space...\n");
+	if (memoryCodeMapped) {
+		Result rc = svcUnmapProcessCodeMemory(envGetOwnProcessHandle(),
+			static_cast<u64>(memoryCodeBase), static_cast<u64>(memorySrcBase), SWITCH_MEMORY_SIZE);
+		if (R_FAILED(rc)) {
+			printf("Failed to release code memory (result: 0x%08x)\n", static_cast<unsigned>(rc));
+			return;
+		}
+		memoryCodeMapped = false;
+	}
 
-    free((void*)memorySrcBase);
-	memorySrcBase = 0;
+	if (memorySrcBase) {
+		free(reinterpret_cast<void *>(memorySrcBase));
+		memorySrcBase = 0;
+	}
 
-    /*
-	virtmemFree((void*)memoryBase, 0x10000000);
+	if (memoryReservation || memoryCodeReservation) {
+		virtmemLock();
+		if (memoryCodeReservation) {
+			virtmemRemoveReservation(memoryCodeReservation);
+			memoryCodeReservation = nullptr;
+		}
+		if (memoryReservation) {
+			virtmemRemoveReservation(memoryReservation);
+			memoryReservation = nullptr;
+		}
+		virtmemUnlock();
+	}
+
 	memoryBase = 0;
-	virtmemFree((void*)memoryCodeBase, 0x10000000);
 	memoryCodeBase = 0;
-	*/
 #endif
 }
 
 void *MemArena::CreateView(s64 offset, size_t size, void *base)
 {
 #ifdef HAVE_LIBNX
-	Result rc = svcMapProcessMemory(base, envGetOwnProcessHandle(), (u64)(memoryCodeBase + offset), size);
-	if(R_FAILED(rc))
-	{
-		printf("Fatal error creating the view... base: %p offset: 0x%x size: 0x%x src: %p err: 0x%x\n", base, offset, size, memoryCodeBase + offset, rc);
-	} else {
-		printf("Created the view... base: %p offset: 0x%x size: 0x%x src: %p err: 0x%x\n", base, offset, size, memoryCodeBase + offset, rc);
+	const u64 source = static_cast<u64>(memoryCodeBase) + static_cast<u64>(offset);
+	Result rc = svcMapProcessMemory(base, envGetOwnProcessHandle(), source, size);
+	if (R_FAILED(rc)) {
+		printf("Failed to create view at %p from %p (size: 0x%zx, result: 0x%08x)\n",
+			base, reinterpret_cast<void *>(source), size, static_cast<unsigned>(rc));
+		return nullptr;
 	}
 
-    return base;
+	return base;
 #else
 	void *retval = mmap(base, size, PROT_READ | PROT_WRITE, MAP_SHARED |
 // Do not sync memory to underlying file. Linux has this by default.
@@ -166,30 +189,78 @@ void MemArena::ReleaseView(s64 offset, void* view, size_t size) {
 #ifndef HAVE_LIBNX
 	munmap(view, size);
 #else
-	if(R_FAILED(svcUnmapProcessMemory(view, envGetOwnProcessHandle(), (u64)(memoryCodeBase + offset), size)))
-        printf("Failed to unmap View...\n");
+	const u64 source = static_cast<u64>(memoryCodeBase) + static_cast<u64>(offset);
+	Result rc = svcUnmapProcessMemory(view, envGetOwnProcessHandle(), source, size);
+	if (R_FAILED(rc))
+		printf("Failed to unmap view at %p (result: 0x%08x)\n", view, static_cast<unsigned>(rc));
 #endif // HAVE_LIBNX
 }
 
 u8* MemArena::Find4GBBase() {
 	// Now, create views in high memory where there's plenty of space.
-#if PPSSPP_ARCH(64BIT) && !defined(USE_ASAN)
+#if defined(HAVE_LIBNX) && PPSSPP_ARCH(64BIT) && !defined(USE_ASAN)
 	// Very precarious - mmap cannot return an error when trying to map already used pages.
 	// This makes the Windows approach above unusable on Linux, so we will simply pray...
-	memorySrcBase = (uintptr_t)memalign(0x1000, 0x10000000);
+	memorySrcBase = reinterpret_cast<uintptr_t>(memalign(SWITCH_PAGE_SIZE, SWITCH_MEMORY_SIZE));
+	if (!memorySrcBase) {
+		printf("Failed to allocate code memory source\n");
+		return nullptr;
+	}
 
-	if(!memoryBase)
-		memoryBase = (uintptr_t)virtmemReserve(0x10000000);
-	
-	if(!memoryCodeBase)
-		memoryCodeBase = (uintptr_t)virtmemReserve(0x10000000);
+	virtmemLock();
+	void *base = virtmemFindAslr(SWITCH_MEMORY_SIZE, 0);
+	if (!base) {
+		virtmemUnlock();
+		printf("Failed to find address space for memory base\n");
+		ReleaseSpace();
+		return nullptr;
+	}
+	memoryReservation = virtmemAddReservation(base, SWITCH_MEMORY_SIZE);
+	if (!memoryReservation) {
+		virtmemUnlock();
+		printf("Failed to reserve address space for memory base\n");
+		ReleaseSpace();
+		return nullptr;
+	}
+	memoryBase = reinterpret_cast<uintptr_t>(base);
 
-	if(R_FAILED(svcMapProcessCodeMemory(envGetOwnProcessHandle(), (u64) memoryCodeBase, (u64) memorySrcBase, 0x10000000)))
-		printf("Failed to Map memory...\n");
-	if(R_FAILED(svcSetProcessMemoryPermission(envGetOwnProcessHandle(), memoryCodeBase, 0x10000000, Perm_Rx)))
-		printf("Failed to set perms...\n");
+	void *codeBase = virtmemFindCodeMemory(SWITCH_MEMORY_SIZE, 0);
+	if (!codeBase) {
+		virtmemUnlock();
+		printf("Failed to find address space for code memory\n");
+		ReleaseSpace();
+		return nullptr;
+	}
+	memoryCodeReservation = virtmemAddReservation(codeBase, SWITCH_MEMORY_SIZE);
+	if (!memoryCodeReservation) {
+		virtmemUnlock();
+		printf("Failed to reserve address space for code memory\n");
+		ReleaseSpace();
+		return nullptr;
+	}
+	memoryCodeBase = reinterpret_cast<uintptr_t>(codeBase);
+	virtmemUnlock();
 
-	return (u8*)memoryBase;
+	Result rc = svcMapProcessCodeMemory(envGetOwnProcessHandle(),
+		static_cast<u64>(memoryCodeBase), static_cast<u64>(memorySrcBase), SWITCH_MEMORY_SIZE);
+	if (R_FAILED(rc)) {
+		printf("Failed to map code memory at %p from %p (result: 0x%08x)\n",
+			reinterpret_cast<void *>(memoryCodeBase), reinterpret_cast<void *>(memorySrcBase), static_cast<unsigned>(rc));
+		ReleaseSpace();
+		return nullptr;
+	}
+	memoryCodeMapped = true;
+
+	rc = svcSetProcessMemoryPermission(envGetOwnProcessHandle(),
+		static_cast<u64>(memoryCodeBase), SWITCH_MEMORY_SIZE, Perm_Rx);
+	if (R_FAILED(rc)) {
+		printf("Failed to set code memory permissions at %p (result: 0x%08x)\n",
+			reinterpret_cast<void *>(memoryCodeBase), static_cast<unsigned>(rc));
+		ReleaseSpace();
+		return nullptr;
+	}
+
+	return reinterpret_cast<u8 *>(memoryBase);
 #else
 	size_t size = 0x10000000;
 	void* base = mmap(0, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED | MAP_NORESERVE, -1, 0);
