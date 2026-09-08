@@ -25,6 +25,25 @@ If you want to download regularly updated builds for Android, Windows x86 and x6
 
 For game compatibility, see [community compatibility feedback](https://report.ppsspp.org/games).
 
+Nintendo Switch port
+====================
+
+This branch contains the Nintendo Switch port of PPSSPP, including fixes for
+the current devkitPro/GCC toolchain, Switch virtual memory mapping, EGL setup,
+and builds without FFmpeg. A helper script is included to configure, build,
+and package the application as an `.nro` file.
+
+Requirements include devkitPro with devkitA64, the Switch CMake toolchain,
+Ninja, and the Switch zstd portlib. From the repository root:
+
+```sh
+./build.sh
+```
+
+Use `./build.sh rebuild` to configure from scratch or `./build.sh clean` to
+remove generated build and distribution files. The packaged application is
+written to `dist/switch/PPSSPP`.
+
 What's new in 1.12.3
 ====================
 * Fix background music speed. A couple translation fixes.
